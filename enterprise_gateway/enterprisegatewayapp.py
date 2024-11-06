@@ -310,7 +310,7 @@ class EnterpriseGatewayApp(EnterpriseGatewayConfigMixin, JupyterApp):
 
         super().start()
 
-        pydevd_pycharm.settrace('localhost', port=20001, stdoutToServer=True, stderrToServer=True)
+        pydevd_pycharm.settrace('debug', port=20001, stdoutToServer=True, stderrToServer=True)
 
         self.log.info(
             "Jupyter Enterprise Gateway {} is available at http{}://{}:{}".format(
