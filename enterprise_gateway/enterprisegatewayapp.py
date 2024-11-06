@@ -14,6 +14,8 @@ import time
 import weakref
 from typing import ClassVar, List, Optional
 
+import pydevd_pycharm
+
 from jupyter_client.kernelspec import KernelSpecManager
 from jupyter_core.application import JupyterApp, base_aliases
 from jupyter_server.serverapp import random_ports
@@ -307,6 +309,8 @@ class EnterpriseGatewayApp(EnterpriseGatewayConfigMixin, JupyterApp):
         """Starts an IO loop for the application."""
 
         super().start()
+
+        pydevd_pycharm.settrace('localhost', port=20001, stdoutToServer=True, stderrToServer=True)
 
         self.log.info(
             "Jupyter Enterprise Gateway {} is available at http{}://{}:{}".format(
