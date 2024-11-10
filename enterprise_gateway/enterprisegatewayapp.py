@@ -12,7 +12,12 @@ import ssl
 import sys
 import time
 import weakref
+from urllib.parse import urlparse
 from typing import ClassVar, List, Optional
+
+import nbformat
+
+from traitlets import Bytes, CBool, Instance, Integer, List, Type, Unicode, default, observe
 
 from jupyter_client.kernelspec import KernelSpecManager
 from jupyter_core.application import JupyterApp, base_aliases
@@ -23,6 +28,13 @@ from tornado.log import enable_pretty_logging
 from traitlets.config import Configurable
 from zmq.eventloop import ioloop
 
+from jupyter_core.paths import secure_write
+from jupyter_server.auth.authorizer import AllowAllAuthorizer, Authorizer
+from jupyter_server.services.kernels.connection.base import BaseKernelWebsocketConnection
+from jupyter_server.services.kernels.connection.channels import ZMQChannelsWebsocketConnection
+from jupyter_server.services.kernels.kernelmanager import MappingKernelManager
+
+from .auth.identity import GatewayIdentityProvider
 from ._version import __version__
 from .base.handlers import default_handlers as default_base_handlers
 from .mixins import EnterpriseGatewayConfigMixin
@@ -36,6 +48,7 @@ from .services.sessions.kernelsessionmanager import (
     FileKernelSessionManager,
     WebhookKernelSessionManager,
 )
+from .services.kernels.manager import SeedingMappingKernelManager
 from .services.sessions.sessionmanager import SessionManager
 
 try:
@@ -85,8 +98,74 @@ class EnterpriseGatewayApp(EnterpriseGatewayConfigMixin, JupyterApp):
         RemoteMappingKernelManager,
     ]
 
+    kernel_spec_manager = Instance(KernelSpecManager, allow_none=True)
+
+    kernel_spec_manager_class = Type(
+        default_value=KernelSpecManager,
+        config=True,
+        help="""
+        The kernel spec manager class to use. Should be a subclass
+        of `jupyter_client.kernelspec.KernelSpecManager`.
+        """,
+    )
+
+    kernel_manager_class = Type(
+        klass=MappingKernelManager,
+        default_value=SeedingMappingKernelManager,
+        config=True,
+        help="""The kernel manager class to use.""",
+    )
+
+    kernel_websocket_connection_class = Type(
+        default_value=ZMQChannelsWebsocketConnection,
+        klass=BaseKernelWebsocketConnection,
+        config=True,
+        help="""The kernel websocket connection class to use.""",
+    )
+
+    authorizer_class = Type(
+        default_value=AllowAllAuthorizer,
+        klass=Authorizer,
+        config=True,
+        help="The authorizer class to use.",
+    )
+
+    identity_provider_class = Type(
+        default_value=GatewayIdentityProvider,
+        klass=GatewayIdentityProvider,
+        config=True,
+        help="The identity provider class to use.",
+    )
+
     # Enable some command line shortcuts
     aliases = aliases
+
+    @default("default_kernel_name")
+    def default_kernel_name_default(self):
+        # defaults to Jupyter's default kernel name on empty string
+        return os.getenv(self.default_kernel_name_env, "")
+    
+    force_kernel_name_env = "EG_FORCE_KERNEL_NAME"
+    force_kernel_name = Unicode(
+        config=True,
+        help="Override any kernel name specified in a notebook or request (KG_FORCE_KERNEL_NAME env var)",
+    )
+    
+    @default("force_kernel_name")
+    def force_kernel_name_default(self):
+        return os.getenv(self.force_kernel_name_env, "")
+
+    seed_uri_env = "EG_SEED_URI"
+    seed_uri = Unicode(
+        None,
+        config=True,
+        allow_none=True,
+        help="Runs the notebook (.ipynb) at the given URI on every kernel launched. No seed by default. (KG_SEED_URI env var)",
+    )
+
+    @default("seed_uri")
+    def seed_uri_default(self):
+        return os.getenv(self.seed_uri_env)
 
     def initialize(self, argv: Optional[List[str]] = None) -> None:
         """Initializes the base class, configurable manager instances, the
@@ -102,11 +181,49 @@ class EnterpriseGatewayApp(EnterpriseGatewayConfigMixin, JupyterApp):
         self.init_webapp()
         self.init_http_server()
 
+    def _load_notebook(self, uri):
+        """Loads a notebook from the local filesystem or HTTP(S) URL.
+
+        Raises
+        ------
+        RuntimeError if there is no kernel spec matching the one specified in
+        the notebook or forced via configuration.
+
+        Returns
+        -------
+        object
+            Notebook object from nbformat
+        """
+        parts = urlparse(uri)
+
+        if parts.scheme not in ("http", "https"):
+            # Local file
+            path = parts._replace(scheme="", netloc="").geturl()
+            with open(path) as nb_fh:
+                notebook = nbformat.read(nb_fh, 4)
+        else:
+            # Remote file
+            import requests
+
+            resp = requests.get(uri, timeout=200)
+            resp.raise_for_status()
+            notebook = nbformat.reads(resp.text, 4)
+
+        # Error if no kernel spec can handle the language requested
+        kernel_name = (
+            self.force_kernel_name
+            if self.force_kernel_name
+            else notebook["metadata"]["kernelspec"]["name"]
+        )
+        self.kernel_spec_manager.get_kernel_spec(kernel_name)
+
+        return notebook
+
     def init_configurables(self) -> None:
         """Initializes all configurable objects including a kernel manager, kernel
         spec manager, session manager, and personality.
         """
-        self.kernel_spec_manager = KernelSpecManager(parent=self)
+        #self.kernel_spec_manager = KernelSpecManager(parent=self)
 
         self.kernel_spec_manager = self.kernel_spec_manager_class(
             parent=self,
@@ -121,6 +238,11 @@ class EnterpriseGatewayApp(EnterpriseGatewayConfigMixin, JupyterApp):
         kwargs = {}
         if self.default_kernel_name:
             kwargs["default_kernel_name"] = self.default_kernel_name
+
+        self.seed_notebook = None
+        if self.seed_uri is not None:
+            # Note: must be set before instantiating a SeedingMappingKernelManager
+            self.seed_notebook = self._load_notebook(self.seed_uri)
 
         self.kernel_manager = self.kernel_manager_class(
             parent=self,
@@ -218,6 +340,8 @@ class EnterpriseGatewayApp(EnterpriseGatewayConfigMixin, JupyterApp):
         logging.getLogger().setLevel(self.log_level)
 
         handlers = self._create_request_handlers()
+        
+        self.identity_provider = self.identity_provider_class(parent=self, log=self.log)
 
         self.web_app = web.Application(
             handlers=handlers,
@@ -242,6 +366,7 @@ class EnterpriseGatewayApp(EnterpriseGatewayConfigMixin, JupyterApp):
             eg_unauthorized_users=self.unauthorized_users,
             # Also set the allow_origin setting used by jupyter_server so that the
             # check_origin method used everywhere respects the value
+            cookie_secret="abcd",
             allow_origin=self.allow_origin,
             # Set base_url for use in request handlers
             base_url=self.base_url,
@@ -250,8 +375,11 @@ class EnterpriseGatewayApp(EnterpriseGatewayConfigMixin, JupyterApp):
             # setting ws_ping_interval value that can allow it to be modified for the purpose of toggling ping mechanism
             # for zmq web-sockets or increasing/decreasing web socket ping interval/timeouts.
             ws_ping_interval=self.ws_ping_interval * 1000,
+            identity_provider=self.identity_provider,
             # Add a pass-through authorizer for now
-            authorizer=AllowAllAuthorizer(),
+            #authorizer=AllowAllAuthorizer(),
+            authorizer=self.authorizer_class(parent=self),
+            kernel_websocket_connection_class=self.kernel_websocket_connection_class,
         )
 
     def _build_ssl_options(self) -> Optional[ssl.SSLContext]:

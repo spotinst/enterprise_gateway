@@ -6,6 +6,9 @@
 import json
 from typing import Dict, List, Optional
 
+import jupyter_server.kernelspecs.handlers as server_kernelspecs_resources_handlers
+import jupyter_server.services.kernelspecs.handlers as server_handlers
+
 from jupyter_server.base.handlers import JupyterHandler
 from jupyter_server.services.kernelspecs.handlers import is_kernelspec_model, kernelspec_model
 from jupyter_server.utils import ensure_async, url_unescape
@@ -191,10 +194,21 @@ class KernelSpecResourceHandler(
 
 kernel_name_regex: str = r"(?P<kernel_name>[\w\.\-%]+)"
 
+default_handlers = []
+for path, cls in server_handlers.default_handlers:
+    # Everything should have CORS and token auth
+    bases = (TokenAuthorizationMixin, CORSMixin, JSONErrorsMixin, cls)
+    default_handlers.append((path, type(cls.__name__, bases, {})))
+
+for path, cls in server_kernelspecs_resources_handlers.default_handlers:
+    # Everything should have CORS and token auth
+    bases = (TokenAuthorizationMixin, CORSMixin, JSONErrorsMixin, cls)
+    default_handlers.append((path, type(cls.__name__, bases, {})))
+
 # Extends the default handlers from the jupyter_server package with token auth, CORS
 # and JSON errors.
-default_handlers: List[tuple] = [
-    (r"/api/kernelspecs", MainKernelSpecHandler),
-    (r"/api/kernelspecs/%s" % kernel_name_regex, KernelSpecHandler),
-    (r"/kernelspecs/%s/(?P<path>.*)" % kernel_name_regex, KernelSpecResourceHandler),
-]
+#default_handlers: List[tuple] = [
+#    (r"/api/kernelspecs", MainKernelSpecHandler),
+#    (r"/api/kernelspecs/%s" % kernel_name_regex, KernelSpecHandler),
+#    (r"/kernelspecs/%s/(?P<path>.*)" % kernel_name_regex, KernelSpecResourceHandler),
+#]

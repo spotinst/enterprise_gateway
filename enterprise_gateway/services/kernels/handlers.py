@@ -153,8 +153,8 @@ class KernelHandler(
         await super().delete(kernel_id=kernel_id)
 
 
-class ZMQChannelsHandler(
-    TokenAuthorizationMixin, CORSMixin, JSONErrorsMixin, jupyter_server_handlers.ZMQChannelsHandler
+class KernelWebsocketHandler(
+    TokenAuthorizationMixin, CORSMixin, JSONErrorsMixin, jupyter_server_handlers.KernelWebsocketHandler
 ):
     """Extends the kernel websocket handler."""
 

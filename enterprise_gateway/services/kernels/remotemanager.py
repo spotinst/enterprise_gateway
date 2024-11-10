@@ -564,7 +564,7 @@ class RemoteKernelManager(EnterpriseGatewayConfigMixin, AsyncIOLoopKernelManager
         env.update(self.user_overrides)
 
         # No longer using Kernel Gateway, but retain references of B/C purposes
-        env["KERNEL_GATEWAY"] = "1"
+        env["ENTERPRISE_GATEWAY"] = "1"
         if "EG_AUTH_TOKEN" in env:
             del env["EG_AUTH_TOKEN"]
         if "KG_AUTH_TOKEN" in env:
