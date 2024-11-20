@@ -310,10 +310,8 @@ class EnterpriseGatewayApp(EnterpriseGatewayConfigMixin, JupyterApp):
 
         super().start()
 
-        self.log.info("Starting Enterprise Gateway...")
-        self.log.info("pycharm debug mode")
-
-        pydevd_pycharm.settrace('debug', port=20001, stdoutToServer=True, stderrToServer=True)
+        if os.environ.get("EG_DEBUG", "false").lower() == "true":
+            pydevd_pycharm.settrace('debug', port=20001, stdoutToServer=True, stderrToServer=True)
 
         self.log.info(
             "Jupyter Enterprise Gateway {} is available at http{}://{}:{}".format(
