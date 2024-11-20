@@ -628,6 +628,9 @@ class RemoteKernelManager(EnterpriseGatewayConfigMixin, AsyncIOLoopKernelManager
 
         if now:  # if auto-restarting (when now is True), indicate we're restarting.
             self.restarting = True
+            
+        # drop kernel name
+        kwargs.pop("kernel_name", None)
 
         await super().restart_kernel(now, **kwargs)
         if isinstance(self.process_proxy, RemoteProcessProxy):  # for remote kernels...
