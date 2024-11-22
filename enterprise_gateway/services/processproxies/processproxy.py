@@ -546,7 +546,6 @@ class BaseProcessProxyABC(metaclass=abc.ABCMeta):
 
         # Remove kernel_headers
         kwargs.pop("kernel_headers", None)
-        kwargs.pop("kernel_name", None)
         return launch_kernel(cmd, **kwargs)
 
     def cleanup(self) -> None:  # noqa
